@@ -13,6 +13,7 @@
         std::clog << " [node " << m_node->GetId() << "] ";                                         \
     }
 
+#include <random>
 #include "tcp-socket-base.h"
 
 #include "ipv4-end-point.h"
@@ -1719,9 +1720,9 @@ TcpSocketBase::EnterRecovery(uint32_t currentDelivered)
     if (!m_congestionControl->HasCongControl())
     {
         m_recoveryOps->EnterRecovery(m_tcb, m_dupAckCount, UnAckDataCount(), currentDelivered);
-        NS_LOG_INFO(m_dupAckCount << " dupack. Enter fast recovery mode."
-                                  << "Reset cwnd to " << m_tcb->m_cWnd << ", ssthresh to "
-                                  << m_tcb->m_ssThresh << " at fast recovery seqnum " << m_recover
+        NS_LOG_INFO(m_dupAckCount << " dupack. Enter fast recovery mode." << "Reset cwnd to "
+                                  << m_tcb->m_cWnd << ", ssthresh to " << m_tcb->m_ssThresh
+                                  << " at fast recovery seqnum " << m_recover
                                   << " calculated in flight: " << bytesInFlight);
     }
 
@@ -2255,9 +2256,9 @@ TcpSocketBase::ProcessAck(const SequenceNumber32& ackNumber,
 
                 m_tcb->m_cWndInfl = m_tcb->m_cWnd;
 
-                NS_LOG_LOGIC("Congestion control called: "
-                             << " cWnd: " << m_tcb->m_cWnd << " ssTh: " << m_tcb->m_ssThresh
-                             << " segsAcked: " << segsAcked);
+                NS_LOG_LOGIC("Congestion control called: " << " cWnd: " << m_tcb->m_cWnd
+                                                           << " ssTh: " << m_tcb->m_ssThresh
+                                                           << " segsAcked: " << segsAcked);
 
                 NewAck(ackNumber, true);
             }
@@ -3107,6 +3108,20 @@ TcpSocketBase::AddSocketTags(const Ptr<Packet>& p, bool isEct) const
      * if both options are set. Once the packet got to layer three, only
      * the corresponding tags will be read.
      */
+
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<double> dis(0.0, 1.0);
+    double randDouble = dis(gen);
+    if (randDouble > 0.5)
+    {
+        m_tcb->m_ectCodePoint = ns3::TcpSocketState::EcnCodePoint_t::Ect0;
+    }
+    else
+    {
+        m_tcb->m_ectCodePoint = ns3::TcpSocketState::EcnCodePoint_t::Ect1;
+    }
+
     if (GetIpTos())
     {
         SocketIpTosTag ipTosTag;

@@ -8,6 +8,10 @@
  *          Mohit P. Tahiliani <tahiliani@nitk.edu.in>
  */
 
+#include <cstdint>
+#include "tcp-socket-base.h"
+#include "tcp-linux-reno.h"
+
 #include "tcp-bbr.h"
 
 #include "ns3/log.h"
@@ -26,7 +30,8 @@ TcpBbr::GetTypeId()
 {
     static TypeId tid =
         TypeId("ns3::TcpBbr")
-            .SetParent<TcpCongestionOps>()
+            // .SetParent<TcpCongestionOps>()
+            .SetParent<TcpLinuxReno>()
             .AddConstructor<TcpBbr>()
             .SetGroupName("Internet")
             .AddAttribute("Stream",
@@ -77,19 +82,52 @@ TcpBbr::GetTypeId()
             .AddTraceSource("CwndGain",
                             "The dynamic congestion window gain factor",
                             MakeTraceSourceAccessor(&TcpBbr::m_cWndGain),
-                            "ns3::TracedValueCallback::Double");
+                            "ns3::TracedValueCallback::Double")
+            .AddAttribute("DctcpShiftG",
+                          "Parameter G for updating dctcp_alpha",
+                          DoubleValue(0.0625),
+                          MakeDoubleAccessor(&TcpBbr::m_g),
+                          MakeDoubleChecker<double>(0, 1))
+            .AddAttribute("DctcpAlphaOnInit",
+                          "Initial alpha value",
+                          DoubleValue(1.0),
+                          MakeDoubleAccessor(&TcpBbr::InitializeDctcpAlpha),
+                          MakeDoubleChecker<double>(0, 1))
+            .AddAttribute("UseEct0",
+                          "Use ECT(0) for ECN codepoint, if false use ECT(1)",
+                          BooleanValue(true),
+                          MakeBooleanAccessor(&TcpBbr::m_useEct0),
+                          MakeBooleanChecker())
+            .AddTraceSource("CongestionEstimate",
+                            "Update sender-side congestion estimate state",
+                            MakeTraceSourceAccessor(&TcpBbr::m_traceCongestionEstimate),
+                            "ns3::TcpBbr::CongestionEstimateTracedCallback");
     return tid;
 }
 
 TcpBbr::TcpBbr()
-    : TcpCongestionOps()
+    // : TcpCongestionOps()
+    : TcpLinuxReno(),
+      m_ackedBytesEcn(0),
+      m_ackedBytesTotal(0),
+      m_priorRcvNxt(SequenceNumber32(0)),
+      m_priorRcvNxtFlag(false),
+      // m_alpha(1.0),
+      m_nextSeq(SequenceNumber32(0)),
+      m_nextSeqFlag(false),
+      m_ceState(false),
+      m_delayedAckReserved(false),
+      // m_g(0.0625),
+      // m_useEct0(true),
+      m_initialized(false)
 {
     NS_LOG_FUNCTION(this);
     m_uv = CreateObject<UniformRandomVariable>();
 }
 
 TcpBbr::TcpBbr(const TcpBbr& sock)
-    : TcpCongestionOps(sock),
+    // : TcpCongestionOps(sock),
+    : TcpLinuxReno(sock),
       m_bandwidthWindowLength(sock.m_bandwidthWindowLength),
       m_pacingGain(sock.m_pacingGain),
       m_cWndGain(sock.m_cWndGain),
@@ -127,7 +165,19 @@ TcpBbr::TcpBbr(const TcpBbr& sock)
       m_extraAckedIdx(sock.m_extraAckedIdx),
       m_ackEpochTime(sock.m_ackEpochTime),
       m_ackEpochAcked(sock.m_ackEpochAcked),
-      m_hasSeenRtt(sock.m_hasSeenRtt)
+      m_hasSeenRtt(sock.m_hasSeenRtt),
+      m_ackedBytesEcn(sock.m_ackedBytesEcn),
+      m_ackedBytesTotal(sock.m_ackedBytesTotal),
+      m_priorRcvNxt(sock.m_priorRcvNxt),
+      m_priorRcvNxtFlag(sock.m_priorRcvNxtFlag),
+      m_alpha(sock.m_alpha),
+      m_nextSeq(sock.m_nextSeq),
+      m_nextSeqFlag(sock.m_nextSeqFlag),
+      m_ceState(sock.m_ceState),
+      m_delayedAckReserved(sock.m_delayedAckReserved),
+      m_g(sock.m_g),
+      m_useEct0(sock.m_useEct0),
+      m_initialized(sock.m_initialized)
 {
     NS_LOG_FUNCTION(this);
 }
@@ -711,6 +761,18 @@ TcpBbr::CongControl(Ptr<TcpSocketState> tcb,
 }
 
 void
+TcpBbr::Init(Ptr<TcpSocketState> tcb)
+{
+    NS_LOG_FUNCTION(this << tcb);
+    NS_LOG_INFO("Enabling DctcpEcn for BBR");
+    tcb->m_useEcn = TcpSocketState::On;
+    tcb->m_ecnMode = TcpSocketState::DctcpEcn;
+    tcb->m_ectCodePoint = m_useEct0 ? TcpSocketState::Ect0 : TcpSocketState::Ect1;
+    SetSuppressIncreaseIfCwndLimited(false);
+    m_initialized = true;
+}
+
+void
 TcpBbr::CongestionStateSet(Ptr<TcpSocketState> tcb, const TcpSocketState::TcpCongState_t newState)
 {
     NS_LOG_FUNCTION(this << tcb << newState);
@@ -757,14 +819,19 @@ void
 TcpBbr::CwndEvent(Ptr<TcpSocketState> tcb, const TcpSocketState::TcpCAEvent_t event)
 {
     NS_LOG_FUNCTION(this << tcb << event);
-    if (event == TcpSocketState::CA_EVENT_COMPLETE_CWR)
+    switch (event)
     {
+    case TcpSocketState::CA_EVENT_COMPLETE_CWR:
         NS_LOG_DEBUG("CwndEvent triggered to CA_EVENT_COMPLETE_CWR :: " << event);
         m_packetConservation = false;
         RestoreCwnd(tcb);
-    }
-    else if (event == TcpSocketState::CA_EVENT_TX_START && m_appLimited)
-    {
+        break;
+
+    case TcpSocketState::CA_EVENT_TX_START:
+        if (!m_appLimited)
+        {
+            break;
+        }
         NS_LOG_DEBUG("CwndEvent triggered to CA_EVENT_TX_START :: " << event);
         m_idleRestart = true;
         m_ackEpochTime = Simulator::Now();
@@ -782,6 +849,24 @@ TcpBbr::CwndEvent(Ptr<TcpSocketState> tcb, const TcpSocketState::TcpCAEvent_t ev
                 ExitProbeRTT();
             }
         }
+        break;
+
+    case TcpSocketState::CA_EVENT_ECN_IS_CE:
+        CeState0to1(tcb);
+        break;
+
+    case TcpSocketState::CA_EVENT_ECN_NO_CE:
+        CeState1to0(tcb);
+        break;
+
+    case TcpSocketState::CA_EVENT_DELAYED_ACK:
+    case TcpSocketState::CA_EVENT_NON_DELAYED_ACK:
+        UpdateAckReserved(tcb, event);
+        break;
+
+    default:
+        /* Don't care for the rest. */
+        break;
     }
 }
 
@@ -790,6 +875,7 @@ TcpBbr::GetSsThresh(Ptr<const TcpSocketState> tcb, uint32_t bytesInFlight)
 {
     NS_LOG_FUNCTION(this << tcb << bytesInFlight);
     SaveCwnd(tcb);
+    // return static_cast<uint32_t>((1 - m_alpha / 2.0) * tcb->m_cWnd);
     return tcb->m_ssThresh;
 }
 
@@ -797,6 +883,155 @@ Ptr<TcpCongestionOps>
 TcpBbr::Fork()
 {
     return CopyObject<TcpBbr>(this);
+}
+
+void
+TcpBbr::PktsAcked(Ptr<TcpSocketState> tcb, uint32_t segmentsAcked, const Time& rtt)
+{
+    NS_LOG_FUNCTION(this << tcb << segmentsAcked << rtt);
+    m_rttJitter = (1 - m_g) * m_rttJitter +
+                  m_g * std::abs(rtt.GetNanoSeconds() - m_minRtt.Get().GetNanoSeconds());
+    // NS_LOG_INFO("m_rttJitter " << m_rttJitter);
+    // NS_LOG_INFO(tcb->m_ectCodePoint);
+    m_ackedBytesTotal += segmentsAcked * tcb->m_segmentSize;
+    if (tcb->m_ecnState == TcpSocketState::ECN_ECE_RCVD)
+    {
+        m_ackedBytesEcn += segmentsAcked * tcb->m_segmentSize;
+        if (tcb->m_ectCodePoint == ns3::TcpSocketState::EcnCodePoint_t::Ect0)
+        {
+            m_cWndGain += 1;
+        }
+        else
+        {
+            m_cWndGain -= 1;
+        }
+    }
+
+    if (!m_nextSeqFlag)
+    {
+        m_nextSeq = tcb->m_nextTxSequence;
+        m_nextSeqFlag = true;
+    }
+    if (tcb->m_lastAckedSeq >= m_nextSeq)
+    {
+        double bytesEcn = 0.0; // Corresponds to variable M in RFC 8257
+        if (m_ackedBytesTotal > 0)
+        {
+            bytesEcn = static_cast<double>(m_ackedBytesEcn * 1.0 / m_ackedBytesTotal);
+        }
+
+        m_alpha = (1.0 - m_g) * m_alpha + m_g * bytesEcn;
+        //! Default m_cWndGain is 2.0
+        m_cWndGain = static_cast<double>((1 - bytesEcn / 2.0) * 2.0);
+        //! Default m_minRttFilterLen is 10.0
+        m_minRttFilterLen = Time{Seconds((1 - bytesEcn / 2.0) * 15.0)};
+
+        m_traceCongestionEstimate(m_ackedBytesEcn, m_ackedBytesTotal, m_alpha);
+        NS_LOG_INFO("bytesEcn " << bytesEcn << ", m_alpha " << m_alpha << ", m_g " << m_g
+                                << ", m_cwndGain " << m_cWndGain << ", m_pacingGain "
+                                << m_pacingGain << ", m_minRttFilterLen " << m_minRttFilterLen);
+        Reset(tcb);
+    }
+}
+
+void
+TcpBbr::InitializeDctcpAlpha(double alpha)
+{
+    NS_LOG_FUNCTION(this << alpha);
+    NS_ABORT_MSG_IF(m_initialized, "DCTCP has already been initialized");
+    m_alpha = alpha;
+}
+
+void
+TcpBbr::Reset(Ptr<TcpSocketState> tcb)
+{
+    NS_LOG_FUNCTION(this << tcb);
+    m_nextSeq = tcb->m_nextTxSequence;
+    m_ackedBytesEcn = 0;
+    m_ackedBytesTotal = 0;
+}
+
+void
+TcpBbr::CeState0to1(Ptr<TcpSocketState> tcb)
+{
+    NS_LOG_FUNCTION(this << tcb);
+    if (!m_ceState && m_delayedAckReserved && m_priorRcvNxtFlag)
+    {
+        SequenceNumber32 tmpRcvNxt;
+        /* Save current NextRxSequence. */
+        tmpRcvNxt = tcb->m_rxBuffer->NextRxSequence();
+
+        /* Generate previous ACK without ECE */
+        tcb->m_rxBuffer->SetNextRxSequence(m_priorRcvNxt);
+        tcb->m_sendEmptyPacketCallback(TcpHeader::ACK);
+
+        /* Recover current RcvNxt. */
+        tcb->m_rxBuffer->SetNextRxSequence(tmpRcvNxt);
+    }
+
+    if (!m_priorRcvNxtFlag)
+    {
+        m_priorRcvNxtFlag = true;
+    }
+    m_priorRcvNxt = tcb->m_rxBuffer->NextRxSequence();
+    m_ceState = true;
+    tcb->m_ecnState = TcpSocketState::ECN_CE_RCVD;
+}
+
+void
+TcpBbr::CeState1to0(Ptr<TcpSocketState> tcb)
+{
+    NS_LOG_FUNCTION(this << tcb);
+    if (m_ceState && m_delayedAckReserved && m_priorRcvNxtFlag)
+    {
+        SequenceNumber32 tmpRcvNxt;
+        /* Save current NextRxSequence. */
+        tmpRcvNxt = tcb->m_rxBuffer->NextRxSequence();
+
+        /* Generate previous ACK with ECE */
+        tcb->m_rxBuffer->SetNextRxSequence(m_priorRcvNxt);
+        tcb->m_sendEmptyPacketCallback(TcpHeader::ACK | TcpHeader::ECE);
+
+        /* Recover current RcvNxt. */
+        tcb->m_rxBuffer->SetNextRxSequence(tmpRcvNxt);
+    }
+
+    if (!m_priorRcvNxtFlag)
+    {
+        m_priorRcvNxtFlag = true;
+    }
+    m_priorRcvNxt = tcb->m_rxBuffer->NextRxSequence();
+    m_ceState = false;
+
+    if (tcb->m_ecnState.Get() == TcpSocketState::ECN_CE_RCVD ||
+        tcb->m_ecnState.Get() == TcpSocketState::ECN_SENDING_ECE)
+    {
+        tcb->m_ecnState = TcpSocketState::ECN_IDLE;
+    }
+}
+
+void
+TcpBbr::UpdateAckReserved(Ptr<TcpSocketState> tcb, const TcpSocketState::TcpCAEvent_t event)
+{
+    NS_LOG_FUNCTION(this << tcb << event);
+    switch (event)
+    {
+    case TcpSocketState::CA_EVENT_DELAYED_ACK:
+        if (!m_delayedAckReserved)
+        {
+            m_delayedAckReserved = true;
+        }
+        break;
+    case TcpSocketState::CA_EVENT_NON_DELAYED_ACK:
+        if (m_delayedAckReserved)
+        {
+            m_delayedAckReserved = false;
+        }
+        break;
+    default:
+        /* Don't care for the rest. */
+        break;
+    }
 }
 
 } // namespace ns3

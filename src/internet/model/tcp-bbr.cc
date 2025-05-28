@@ -8,14 +8,16 @@
  *          Mohit P. Tahiliani <tahiliani@nitk.edu.in>
  */
 
-#include <cstdint>
-#include "tcp-socket-base.h"
-#include "tcp-linux-reno.h"
-
 #include "tcp-bbr.h"
+
+#include "tcp-linux-reno.h"
+#include "tcp-socket-base.h"
 
 #include "ns3/log.h"
 #include "ns3/simulator.h"
+
+#include <cmath>
+#include <cstdint>
 
 namespace ns3
 {
@@ -899,11 +901,11 @@ TcpBbr::PktsAcked(Ptr<TcpSocketState> tcb, uint32_t segmentsAcked, const Time& r
         m_ackedBytesEcn += segmentsAcked * tcb->m_segmentSize;
         if (tcb->m_ectCodePoint == ns3::TcpSocketState::EcnCodePoint_t::Ect0)
         {
-            m_cWndGain += 1;
+            m_cWndGain.Set(std::min(2.5, m_cWndGain.Get() + 0.1));
         }
         else
         {
-            m_cWndGain -= 1;
+            m_cWndGain.Set(std::max(1.5, m_cWndGain.Get() - 0.1));
         }
     }
 

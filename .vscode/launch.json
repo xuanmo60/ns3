@@ -5,10 +5,10 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "(gdb) Launch from scratch",
-            "type": "cppdbg",
+            "name": "(lldb-dap) Launch from scratch",
+            "type": "lldb-dap",
             "request": "launch",
-            "program": "${workspaceFolder}/build/${relativeFileDirname}/ns3-dev-${fileBasenameNoExtension}-${input:buildType}",
+            "program": "${workspaceFolder}/build/${relativeFileDirname}/ns3.44-${fileBasenameNoExtension}-${input:buildType}",
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",

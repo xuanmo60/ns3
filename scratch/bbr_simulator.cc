@@ -162,7 +162,7 @@ main(int argc, char* argv[])
     // // 100Mbps * 100s 为节点 n0 安装服务器程序 ApplicationContainer serverApp =
     // sender.Install(leftWiredNodes.Get(0));
 
-    // !!! <<< Diff start <<< !!!
+    // !!! <<< Burst start <<< !!!
     OnOffHelper onOff1("ns3::UdpSocketFactory",
                        InetSocketAddress(p2pInterfacesRight.GetAddress(1)));
     onOff1.SetAttribute("DataRate", DataRateValue(DataRate("1Gbps")));
@@ -170,7 +170,7 @@ main(int argc, char* argv[])
     ApplicationContainer app1 = onOff1.Install(leftWiredNodes.Get(0));
     app1.Start(Seconds(10.0));
     app1.Stop(Seconds(50.0));
-    // !!! >>> Diff end >>> !!!
+    // !!! >>> Burst end >>> !!!
 
     //! 启动应用
     sinkApp.Start(Seconds(0.0));

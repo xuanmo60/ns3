@@ -1,16 +1,25 @@
-CC = g++
-CFLAGS = -std=c++23 -Wall
+# Makefile
 
-all: mkdir ping_caller printer
+CXX := g++
+CXXFLAGS := -std=c++11 -Wall -O2
 
-mkdir: clean
-	mkdir ./build
+# Executable names
+CALLER := pingCaller
+HANDLER := pingHandler
 
-ping_caller: ping_caller.cc
-	$(CC) $(CFLAGS) -o ./build/$@ $<
+# FIFO path
+FIFO_PATH := /tmp/ping_fifo
 
-printer: printer.cc
-	$(CC) $(CFLAGS) -o ./build/$@ $<
+.PHONY: all clean
+
+all: $(CALLER) $(HANDLER)
+
+$(CALLER): pingCaller.cc
+	$(CXX) $(CXXFLAGS) -o $(CALLER) pingCaller.cc
+
+$(HANDLER): pingHandler.cc
+	$(CXX) $(CXXFLAGS) -o $(HANDLER) pingHandler.cc
 
 clean:
-	rm -rf ./build
+	-rm -f $(CALLER) $(HANDLER)
+	-rm -f $(FIFO_PATH)

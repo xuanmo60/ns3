@@ -6,6 +6,7 @@
 #include "ns3/ipv4-flow-classifier.h" // 关键头文件
 #include "ns3/mobility-module.h"
 #include "ns3/network-module.h"
+#include "ns3/ping-helper.h"
 #include "ns3/point-to-point-module.h"
 #include "ns3/ssid.h"
 #include "ns3/tcp-bbr.h"
@@ -85,12 +86,12 @@ main(int argc, char* argv[])
     tchLeft.Install(p2pDevicesLeft);
 
     //! 创建随机丢包模型
-    // Ptr<RateErrorModel> em = CreateObject<RateErrorModel>();
-    // em->SetAttribute("ErrorRate", DoubleValue(0.00001)); // 0.01% 丢包率
-    // em->SetAttribute("ErrorUnit", StringValue("ERROR_UNIT_PACKET"));
+    Ptr<RateErrorModel> em = CreateObject<RateErrorModel>();
+    em->SetAttribute("ErrorRate", DoubleValue(0.00001)); // 0.01% 丢包率
+    em->SetAttribute("ErrorUnit", StringValue("ERROR_UNIT_PACKET"));
     //! 对 n0, n1 应用丢包模型
-    // p2pDevicesLeft.Get(0)->SetAttribute("ReceiveErrorModel", PointerValue(em));
-    // p2pDevicesLeft.Get(1)->SetAttribute("ReceiveErrorModel", PointerValue(em));
+    p2pDevicesLeft.Get(0)->SetAttribute("ReceiveErrorModel", PointerValue(em));
+    p2pDevicesLeft.Get(1)->SetAttribute("ReceiveErrorModel", PointerValue(em));
 
     //! 配置右侧有线链路 (n1 -> n2)
     //! DataRate = 100Mbps, Delay = 10ms
@@ -135,7 +136,29 @@ main(int argc, char* argv[])
                                     Ipv4Mask("255.255.255.0"),
                                     2); // 右侧网络
 
+    //! 为右端节点 (n2) 添加默认路由
+    Ptr<Ipv4StaticRouting> rightNodeRouting =
+        staticRouting.GetStaticRouting(rightWiredNodes.Get(0)->GetObject<Ipv4>());
+    rightNodeRouting->SetDefaultRoute(Ipv4Address("10.1.2.1"), 1);
+
     Ipv4GlobalRoutingHelper::PopulateRoutingTables();
+
+    //! 安装 ping, 客户端定期探测 RTT
+    PingHelper pingHelper(p2pInterfacesRight.GetAddress(0));
+    pingHelper.SetAttribute("Interval", TimeValue(MilliSeconds(100)));
+    pingHelper.SetAttribute("Count", UintegerValue(10000));
+    ApplicationContainer pingApps = pingHelper.Install(rightWiredNodes.Get(0));
+    pingApps.Start(Seconds(1.0));
+    pingApps.Stop(Seconds(100.0));
+
+    std::ofstream rttLog("rtt.log");
+    Ptr<Ping> pingApp = DynamicCast<Ping>(pingApps.Get(0));
+    Callback<void, uint16_t, Time> rttCb([&rttLog](uint16_t seq, Time rtt) {
+        rttLog << Simulator::Now().GetSeconds() << "\t" << rtt.GetMicroSeconds() * 0.001
+               << std::endl;
+    });
+
+    pingApp->TraceConnectWithoutContext("Rtt", rttCb);
 
     //! 安装 TCP 接收端 (右端节点 n2)
     PacketSinkHelper sinkHelper("ns3::TcpSocketFactory",
@@ -168,8 +191,13 @@ main(int argc, char* argv[])
     onOff1.SetAttribute("DataRate", DataRateValue(DataRate("1Gbps")));
     onOff1.SetAttribute("PacketSize", UintegerValue(1472));
     ApplicationContainer app1 = onOff1.Install(leftWiredNodes.Get(0));
-    app1.Start(Seconds(10.0));
-    app1.Stop(Seconds(50.0));
+    // app1.Start(Seconds(10.0));
+    // app1.Stop(Seconds(50.0));
+    for (auto start = 10.0; start < 100.0; start += 10.0)
+    {
+        app1.Start(Seconds(start));
+        app1.Stop(Seconds(start + 0.1));
+    }
     // !!! >>> Burst end >>> !!!
 
     //! 启动应用

@@ -11,29 +11,34 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+// FIFO 文件路径
 static const char* FIFO_PATH = "/tmp/ping_fifo";
-static int fifo_fd = -1;
-static bool keep_running = true;
+// FIFO 文件描述符
+static int fifoFd = -1;
+// 主循环执行标志
+static bool isRunning = true;
 
-// Window size: number of recent RTT samples to keep
+// 存储 RTT 的滑动窗口大小
 static const size_t WINDOW_SIZE = 10;
 
-// SIGINT handler: set flag to exit the main loop
+// 处理 sigint 信号, Ctrl+C 主循环优雅退出
 void
-handle_sigint(int)
+sigintHandler(int)
 {
-    keep_running = false;
+    isRunning = false;
 }
 
-// Parse RTT value (in ms) from a single ping output line.
-// If no valid RTT is found, return a negative value.
+// 从 ping 命令的输出正则匹配 RTT 值
+// 匹配成功时, 转换匹配数组的第一个元素为 double
+// 例 64 bytes from 8.8.8.8: icmp_seq=1 ttl=117 time=12.3 ms -> 返回 12.3
+// 匹配失败时, 返回 -1.0
+// 例 Request timeout -> 返回 -1.0
 double
 parse_rtt(const std::string& line)
 {
-    // Typical Linux ping output contains "time=12.3 ms"
-    static const std::regex re_time(R"(time=([0-9]+\.?[0-9]*)\s*ms)");
-    std::smatch m;
-    if (std::regex_search(line, m, re_time) && m.size() == 2)
+    static const std::regex reg(R"(time=([0-9]+\.?[0-9]*)\s*ms)");
+    std::smatch m; // 匹配数组
+    if (std::regex_search(line, m, reg) && m.size() == 2)
     {
         try
         {
@@ -47,9 +52,9 @@ parse_rtt(const std::string& line)
     return -1.0;
 }
 
-// Compute average RTT from the window
+// 计算滑动窗口内RTT的平均值
 double
-compute_avg(const std::deque<double>& window)
+computeRttAvg(const std::deque<double>& window)
 {
     if (window.empty())
     {
@@ -63,31 +68,31 @@ compute_avg(const std::deque<double>& window)
     return sum / static_cast<double>(window.size());
 }
 
-// Compute RTT jitter (average absolute difference between adjacent samples)
+// 计算 RTT 抖动
 double
-compute_jitter(const std::deque<double>& window)
+computeRttJitter(const std::deque<double>& window)
 {
     if (window.size() < 2)
     {
         return 0.0;
     }
-    double sum_diff = 0.0;
+    double diffSum = 0.0;
     for (size_t i = 1; i < window.size(); ++i)
     {
-        sum_diff += std::abs(window[i] - window[i - 1]);
+        diffSum += std::abs(window[i] - window[i - 1]);
     }
-    return sum_diff / static_cast<double>(window.size() - 1);
+    return diffSum / static_cast<double>(window.size() - 1);
 }
 
 int
 main()
 {
-    // Register SIGINT handler
-    std::signal(SIGINT, handle_sigint);
+    // 注册 sigint 处理函数
+    std::signal(SIGINT, sigintHandler);
 
-    // Create FIFO if it does not exist
     if (access(FIFO_PATH, F_OK) == -1)
     {
+        // 创建命名管道
         if (mkfifo(FIFO_PATH, 0666) == -1)
         {
             if (errno != EEXIST)
@@ -98,9 +103,9 @@ main()
         }
     }
 
-    // Open FIFO for reading (blocks until a writer opens it)
-    fifo_fd = open(FIFO_PATH, O_RDONLY);
-    if (fifo_fd < 0)
+    // 阻塞等待打开 FIFO 文件
+    fifoFd = open(FIFO_PATH, O_RDONLY);
+    if (fifoFd < 0)
     {
         std::perror("open FIFO for read");
         return 1;
@@ -112,48 +117,43 @@ main()
     constexpr size_t BUF_SIZE = 1024;
     char buf[BUF_SIZE];
 
-    // Main loop: read from FIFO and process lines
-    while (keep_running)
+    while (isRunning)
     {
-        ssize_t n = read(fifo_fd, buf, BUF_SIZE - 1);
+        ssize_t n = read(fifoFd, buf, BUF_SIZE - 1); // 读取 FIFO 数据
         if (n > 0)
-        {
+        { // 分割为单独的行
             buf[n] = '\0';
             std::istringstream iss(buf);
             std::string line;
-            // Split by lines, since one read may contain multiple lines
             while (std::getline(iss, line))
             {
                 double rtt = parse_rtt(line);
                 if (rtt >= 0.0)
                 {
-                    // Update sliding window
+                    // 更新滑动窗口
                     window.push_back(rtt);
                     if (window.size() > WINDOW_SIZE)
                     {
                         window.pop_front();
                     }
-                    // Compute metrics
-                    double avg_rtt = compute_avg(window);
-                    double jitter = compute_jitter(window);
-                    // Print results
+                    // 计算并输出统计信息
+                    double rttAvg = computeRttAvg(window);
+                    double rttJitter = computeRttJitter(window);
                     std::cout << "[pingHandler] New RTT=" << rtt << " ms, " << "Window("
-                              << window.size() << "/" << WINDOW_SIZE << ") Avg RTT=" << avg_rtt
-                              << " ms, " << "Recent RTT Jitter=" << jitter << " ms\n";
+                              << window.size() << "/" << WINDOW_SIZE
+                              << ") Recent RTT Avg=" << rttAvg << " ms, "
+                              << " RTT Jitter=" << rttJitter << " ms\n";
                 }
-                // If no RTT was parsed, ignore the line
             }
         }
         else if (n == 0)
         {
-            // Write end closed; sleep briefly then continue
-            usleep(100000); // 100 ms
+            usleep(100000); // 100ms
         }
         else
         {
             if (errno == EINTR)
             {
-                // Interrupted by signal; check keep_running
                 continue;
             }
             std::perror("read from FIFO");
@@ -161,12 +161,11 @@ main()
         }
     }
 
-    // Cleanup before exiting
     std::cout << "\n[pingHandler] Received SIGINT, exiting gracefully...\n";
-    close(fifo_fd);
-    fifo_fd = -1;
-    // Optionally remove the FIFO file
+    // 关闭文件描述符
+    close(fifoFd);
+    fifoFd = -1;
+    // 删除 FIFO 文件
     unlink(FIFO_PATH);
-
     return 0;
 }

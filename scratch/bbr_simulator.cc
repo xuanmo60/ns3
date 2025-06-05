@@ -154,8 +154,8 @@ main(int argc, char* argv[])
     std::ofstream rttLog("rtt.log");
     Ptr<Ping> pingApp = DynamicCast<Ping>(pingApps.Get(0));
     Callback<void, uint16_t, Time> rttCb([&rttLog](uint16_t seq, Time rtt) {
-        rttLog << Simulator::Now().GetSeconds() << "\t" << rtt.GetMicroSeconds() * 0.001
-               << std::endl;
+        rttLog << "No." << Simulator::Now().GetSeconds() << "s, RTT=" << rtt.GetMilliSeconds()
+               << "ms\n";
     });
 
     pingApp->TraceConnectWithoutContext("Rtt", rttCb);
@@ -193,10 +193,10 @@ main(int argc, char* argv[])
     ApplicationContainer app1 = onOff1.Install(leftWiredNodes.Get(0));
     // app1.Start(Seconds(10.0));
     // app1.Stop(Seconds(50.0));
-    for (auto start = 10.0; start < 100.0; start += 10.0)
+    for (auto start = 50.0; start < 100.0; start += 10.0)
     {
         app1.Start(Seconds(start));
-        app1.Stop(Seconds(start + 0.1));
+        app1.Stop(Seconds(start + 5.0));
     }
     // !!! >>> Burst end >>> !!!
 

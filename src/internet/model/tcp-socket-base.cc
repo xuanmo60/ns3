@@ -13,7 +13,6 @@
         std::clog << " [node " << m_node->GetId() << "] ";                                         \
     }
 
-#include <random>
 #include "tcp-socket-base.h"
 
 #include "ipv4-end-point.h"
@@ -54,6 +53,7 @@
 
 #include <algorithm>
 #include <math.h>
+#include <random>
 
 namespace
 {
@@ -3113,6 +3113,26 @@ TcpSocketBase::AddSocketTags(const Ptr<Packet>& p, bool isEct) const
     std::mt19937 gen(rd());
     std::uniform_real_distribution<double> dis(0.0, 1.0);
     double randDouble = dis(gen);
+
+    auto rttDeque = RttCache::Instance().GetRttDeque();
+    if (rttDeque.size() > 1)
+    {
+        double alpha = 1.0 / 6.0;
+        double ewmaRttJitter = 0.0;
+        double last = rttDeque.front().GetMilliSeconds();
+        for (size_t i = 1; i < rttDeque.size(); ++i)
+        {
+            double diff = std::abs(rttDeque[i].GetMilliSeconds() - last);
+            ewmaRttJitter = alpha * diff + (1 - alpha) * ewmaRttJitter;
+            last = rttDeque[i].GetMilliSeconds();
+        }
+        NS_LOG_INFO("[tcp-socket-base] EWMA RTT Jitter: " << ewmaRttJitter << " ms");
+        if (ewmaRttJitter != 0)
+        {
+            NS_LOG_INFO("[ewmaRttJitter != 0] EWMA RTT Jitter: " << ewmaRttJitter << " ms");
+        }
+    }
+
     if (randDouble > 0.5)
     {
         m_tcb->m_ectCodePoint = ns3::TcpSocketState::EcnCodePoint_t::Ect0;

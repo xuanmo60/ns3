@@ -1490,4 +1490,35 @@ typedef void (*EcnStatesTracedValueCallback)(const TcpSocketState::EcnState_t ol
 
 } // namespace ns3
 
+class RttCache
+{
+  public:
+    static RttCache& Instance()
+    {
+        static RttCache instance;
+        return instance;
+    }
+
+    void PushRtt(ns3::Time rtt)
+    {
+        std::lock_guard<std::mutex> mutLock(m_mut);
+        if (m_rttDeque.size() >= 10)
+        {
+            m_rttDeque.pop_front();
+        }
+        m_rttDeque.push_back(rtt);
+    }
+
+    std::deque<ns3::Time> GetRttDeque()
+    {
+        std::lock_guard<std::mutex> mutLock(m_mut);
+        return m_rttDeque;
+    }
+
+  private:
+    RttCache() = default;
+    std::deque<ns3::Time> m_rttDeque;
+    std::mutex m_mut;
+};
+
 #endif /* TCP_SOCKET_BASE_H */

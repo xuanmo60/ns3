@@ -901,11 +901,11 @@ TcpBbr::PktsAcked(Ptr<TcpSocketState> tcb, uint32_t segmentsAcked, const Time& r
         m_ackedBytesEcn += segmentsAcked * tcb->m_segmentSize;
         if (tcb->m_ectCodePoint == ns3::TcpSocketState::EcnCodePoint_t::Ect0)
         {
-            m_cWndGain.Set(std::min(2.5, m_cWndGain.Get() + 0.1));
+            // m_cWndGain.Set(std::min(2.5, m_cWndGain.Get() + 0.1));
         }
         else
         {
-            m_cWndGain.Set(std::max(1.5, m_cWndGain.Get() - 0.1));
+            // m_cWndGain.Set(std::max(1.5, m_cWndGain.Get() - 0.1));
         }
     }
 
@@ -924,9 +924,9 @@ TcpBbr::PktsAcked(Ptr<TcpSocketState> tcb, uint32_t segmentsAcked, const Time& r
 
         m_alpha = (1.0 - m_g) * m_alpha + m_g * bytesEcn;
         //! Default m_cWndGain is 2.0
-        m_cWndGain = static_cast<double>((1 - bytesEcn / 2.0) * 2.0);
+        m_cWndGain = static_cast<double>((1 - std::min(bytesEcn / 2.0, 0.5)) * 2.0);
         //! Default m_minRttFilterLen is 10.0
-        m_minRttFilterLen = Time{Seconds((1 - bytesEcn / 2.0) * 15.0)};
+        m_minRttFilterLen = Time{Seconds((1 - std::min(100 * bytesEcn / 2.0, 0.5)) * 15.0)};
 
         m_traceCongestionEstimate(m_ackedBytesEcn, m_ackedBytesTotal, m_alpha);
         NS_LOG_INFO("bytesEcn " << bytesEcn << ", m_alpha " << m_alpha << ", m_g " << m_g

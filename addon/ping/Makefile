@@ -12,14 +12,17 @@ FIFO_PATH := /tmp/ping_fifo
 
 .PHONY: all clean
 
-all: $(CALLER) $(HANDLER)
+all: build $(CALLER) $(HANDLER)
+
+build:
+	mkdir ./build
 
 $(CALLER): pingCaller.cc
-	$(CXX) $(CXXFLAGS) -o $(CALLER) pingCaller.cc
+	$(CXX) $(CXXFLAGS) -o ./build/$(CALLER) pingCaller.cc
 
 $(HANDLER): pingHandler.cc
-	$(CXX) $(CXXFLAGS) -o $(HANDLER) pingHandler.cc
+	$(CXX) $(CXXFLAGS) -o ./build/$(HANDLER) pingHandler.cc
 
 clean:
-	-rm -f $(CALLER) $(HANDLER)
+	-rm -f ./build
 	-rm -f $(FIFO_PATH)

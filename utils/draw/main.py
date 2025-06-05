@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 
 times = []
 rtts = []
-with open('./rtt.txt', 'r') as f:
+with open('./rtt.log', 'r') as f:
     for line in f:
         if line.strip() == "":
             continue

@@ -3109,11 +3109,6 @@ TcpSocketBase::AddSocketTags(const Ptr<Packet>& p, bool isEct) const
      * the corresponding tags will be read.
      */
 
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_real_distribution<double> dis(0.0, 1.0);
-    double randDouble = dis(gen);
-
     auto rttDeque = RttCache::Instance().GetRttDeque();
     if (rttDeque.size() > 1)
     {
@@ -3130,16 +3125,15 @@ TcpSocketBase::AddSocketTags(const Ptr<Packet>& p, bool isEct) const
         if (ewmaRttJitter != 0)
         {
             NS_LOG_INFO("[ewmaRttJitter != 0] EWMA RTT Jitter: " << ewmaRttJitter << " ms");
+            // if (ewmaRttJitter > UNKNOWN_RTT_JITTER_THRESHOLD)
+            // {
+            //     m_tcb->m_ectCodePoint = ns3::TcpSocketState::EcnCodePoint_t::Ect1;
+            // }
+            // else
+            // {
+            //     m_tcb->m_ectCodePoint = ns3::TcpSocketState::EcnCodePoint_t::Ect0;
+            // }
         }
-    }
-
-    if (randDouble > 0.5)
-    {
-        m_tcb->m_ectCodePoint = ns3::TcpSocketState::EcnCodePoint_t::Ect0;
-    }
-    else
-    {
-        m_tcb->m_ectCodePoint = ns3::TcpSocketState::EcnCodePoint_t::Ect1;
     }
 
     if (GetIpTos())

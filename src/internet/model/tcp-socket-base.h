@@ -21,6 +21,7 @@
 #include "ns3/traced-value.h"
 
 #include <queue>
+#include <shared_mutex>
 #include <stdint.h>
 
 namespace ns3
@@ -1501,7 +1502,7 @@ class RttCache
 
     void PushRtt(ns3::Time rtt)
     {
-        std::lock_guard<std::mutex> mutLock(m_mut);
+        std::lock_guard<std::shared_mutex> lock(m_mut);
         if (m_rttDeque.size() >= 10)
         {
             m_rttDeque.pop_front();
@@ -1511,14 +1512,14 @@ class RttCache
 
     std::deque<ns3::Time> GetRttDeque()
     {
-        std::lock_guard<std::mutex> mutLock(m_mut);
+        std::lock_guard<std::shared_mutex> lock(m_mut);
         return m_rttDeque;
     }
 
   private:
     RttCache() = default;
     std::deque<ns3::Time> m_rttDeque;
-    std::mutex m_mut;
+    std::shared_mutex m_mut;
 };
 
 #endif /* TCP_SOCKET_BASE_H */
